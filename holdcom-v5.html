@@ -799,14 +799,12 @@ async function runEmail() {
   const iframe = document.getElementById('previewFrame');
   const doc = iframe.contentDocument || iframe.contentWindow.document;
   doc.open(); doc.write(S.pageHtml); doc.close();
-  document.getElementById('linkPill').textContent = 'https://insights.holdcom.com/'+S.clientId;
+  document.getElementById('linkPill').textContent = 'Publishing...';
 
   // Checklist
   const checks = [
-    'Download the landing page HTML file',
-    'Upload HTML to Netlify folder (insights.holdcom.com/'+S.clientId+')',
-    'Personalize the email — replace [First Name]',
-    'Confirm tracking link is live before sending',
+    'Review and personalize the email',
+    'Confirm the landing page link is live',
     'Save the full draft script to send after the call'
   ];
   const checkHtml = checks.map((c,i) =>
@@ -820,17 +818,42 @@ async function runEmail() {
     +'<div class="email-box" id="emailTxt" contenteditable="true">'+emailRaw+'</div>',
     '<div class="act-row">'
     +'<button class="act-btn primary" onclick="copyEl(\'emailTxt\',this)">Copy email</button>'
-    +'<button class="act-btn" onclick="downloadPage()">⬇ Download landing page</button>'
-    +'<button class="act-btn" onclick="copyStr(document.getElementById(\'linkPill\').textContent,this)">Copy link</button>'
+    +'<button class="act-btn primary" id="publishBtn" onclick="publishPage()">🚀 Publish landing page</button>'
+    +'<button class="act-btn" onclick="downloadPage()">⬇ Download HTML</button>'
     +'</div>'
+    +'<div id="publishStatus" style="margin-top:8px;"></div>'
     +'<div style="margin-top:16px;font-size:10px;font-family:\'DM Mono\',monospace;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;">Pre-send checklist</div>'
     +checkHtml
     +'<div style="font-size:10px;color:var(--t3);margin-top:8px;">Landing page preview is visible in the right panel →</div>'
   );
 
+  // Auto-publish the landing page
+  publishPage();
+
   S.waiting = 'done';
   ph('Analysis complete');
   hint('');
+}
+
+async function publishPage() {
+  const btn = document.getElementById('publishBtn');
+  const status = document.getElementById('publishStatus');
+  if (!S.pageHtml || !S.clientId) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Publishing...'; }
+  if (status) status.innerHTML = '<span style="color:var(--gold);font-size:11px;">Publishing to Netlify...</span>';
+
+  try {
+    const data = await api('/publish', { html: S.pageHtml, clientId: S.clientId });
+    const liveUrl = data.url;
+    document.getElementById('linkPill').textContent = liveUrl;
+    if (btn) { btn.textContent = '✓ Published'; btn.style.background = 'var(--green)'; btn.style.borderColor = 'var(--green)'; }
+    if (status) status.innerHTML = '<div class="link-disp" style="cursor:pointer;" onclick="copyStr(\''+liveUrl+'\',this)">'
+      + liveUrl + ' <span style="color:var(--t3);font-size:9px;margin-left:6px;">click to copy</span></div>';
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Retry publish'; }
+    if (status) status.innerHTML = '<span style="color:var(--red);font-size:11px;">Publish failed: '+e.message+'. You can still download the HTML.</span>';
+  }
 }
 
 function toggleChk(row) {
