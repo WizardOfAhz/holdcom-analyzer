@@ -300,9 +300,9 @@ app.post("/extract", async (req, res) => {
   const { siteText, clientUrl } = req.body;
   try {
     const result = await callGemini(
-      "You are a business analyst. Extract key information from the provided website text. Report only what is in the text. Never invent or assume.",
-      `Website: ${clientUrl}\n\nPage content:\n${siteText}\n\nExtract:\n1. BUSINESS NAME & TYPE\n2. LOCATION (city, state)\n3. SERVICES (list every one)\n4. EVENT TYPES\n5. KEY PHRASES & TAGLINES (direct quotes in "")\n6. VALUE PROPOSITIONS\n7. CALLS TO ACTION\n8. NOTABLE DETAILS (years, awards, venues, news)`,
-      { maxOutputTokens: 1500, temperature: 0.1 }
+      "You are a business analyst. Extract key information from the provided website text. CRITICAL: Report ONLY what is explicitly stated in the text below. NEVER invent, assume, or add details not present. If something is not mentioned, say 'Not mentioned'. Do NOT guess the location, do NOT add descriptors like 'waterfront' or 'oceanfront' unless those exact words appear in the text.",
+      `Website: ${clientUrl}\n\nPage content:\n${siteText}\n\nExtract:\n1. BUSINESS NAME & TYPE\n2. LOCATION (city, state — ONLY if explicitly stated)\n3. SERVICES (list every one mentioned)\n4. EVENT TYPES (only those explicitly listed)\n5. KEY PHRASES & TAGLINES (direct quotes in "" — must appear verbatim in text)\n6. VALUE PROPOSITIONS\n7. CALLS TO ACTION\n8. NOTABLE DETAILS (years, awards, venues, news — only if stated)`,
+      { maxOutputTokens: 1500, temperature: 0.0 }
     );
     res.json({ result });
   } catch (e) {
@@ -361,7 +361,8 @@ app.post("/rewrite", async (req, res) => {
       `Weave new elements in naturally so the result reads as one cohesive piece.\n` +
       `Match original tone and voice exactly. Hard word limit: ${wordLimit} words.\n` +
       `Wrap only NEW or significantly changed phrases in <<NEW>>...</</NEW>>.\n` +
-      `A senior copywriter should not be able to find the seams.`;
+      `A senior copywriter should not be able to find the seams.\n` +
+      `CRITICAL: ONLY use facts, services, and descriptions from the website context provided. NEVER invent features, locations, or descriptors (like "waterfront", "oceanfront", "lakeside") that are not explicitly in the source material.`;
 
     const raw = await callGemini(sys, prompt, {
       maxOutputTokens: 3500,
@@ -392,18 +393,27 @@ app.post("/revise", async (req, res) => {
 
 // Step 5: Email generation
 app.post("/email", async (req, res) => {
-  const { clientName, repName, finding, clientId } = req.body;
+  const { clientName, repName, finding, scores, clientId, link } = req.body;
   try {
     const sys =
-      `You are a Holdcom account manager writing a short client outreach email.\n` +
-      `Rules: warm, direct, not salesy. Never mention AI tools by name — say "we analyzed your website".\n` +
-      `Reference 1-2 specific things from their site. Mention a scorecard and draft are ready.\n` +
-      `Soft CTA. Under 130 words in body. Sign off with rep name.\n` +
-      `Format: Subject: [subject] then blank line then body only.`;
+      `You are a Holdcom account manager writing a short, curiosity-driven client outreach email.\n` +
+      `GOAL: Get them to click the link to see their personalized scorecard and draft script.\n\n` +
+      `RULES:\n` +
+      `- Warm, direct, human — NOT salesy, NOT robotic, NOT generic\n` +
+      `- Never mention AI, ChatGPT, Gemini, or any AI tools — say "we analyzed your website" or "our team reviewed"\n` +
+      `- Reference 1-2 SPECIFIC things from their site (a service, a phrase, something real)\n` +
+      `- Tease the scorecard: mention they scored well in some areas but there are gaps — don't give all the numbers, create curiosity\n` +
+      `- Include the landing page link naturally — "I put together a quick scorecard for you: [link]"\n` +
+      `- Mention a draft script update is ready to review together\n` +
+      `- Soft CTA: suggest a 10-minute call to walk through it, no pressure\n` +
+      `- Under 130 words in body\n` +
+      `- Sign off with rep name only (no title, no company)\n` +
+      `- Format: Subject: [subject line] then blank line then body only\n` +
+      `- ONLY reference facts provided below. NEVER invent locations, features, or details.`;
 
     const raw = await callGemini(
       sys,
-      `Client: ${clientName}\nRep: ${repName}\nKey finding: ${finding}\nLink: https://insights.holdcom.com/${clientId}`,
+      `Client: ${clientName}\nRep: ${repName}\nScorecard results: ${scores}\nKey findings: ${finding}\nLanding page link: ${link}`,
       { maxOutputTokens: 600, temperature: 0.5 }
     );
     res.json({ result: raw });
