@@ -177,58 +177,87 @@ app.get("/test-key", async (req, res) => {
 });
 
 // Step 1: Fetch and extract website content
+// Tries: direct fetch → allorigins proxy → corsproxy → Google cache
 app.post("/fetch-site", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "url required" });
+
+  const base = url.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const fullUrl = "https://" + base;
 
   const browserHeaders = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "identity",
-    "Connection": "keep-alive",
   };
 
-  // Try multiple URL variations
-  const base = url.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-  const urlsToTry = [
-    "https://" + base,
-    "https://www." + base.replace(/^www\./, ""),
-    "http://" + base,
-  ];
-
-  for (const tryUrl of urlsToTry) {
+  async function tryDirect(fetchUrl, label) {
     try {
-      console.log("Fetching:", tryUrl);
-      const siteRes = await fetch(tryUrl, {
-        headers: browserHeaders,
-        redirect: "follow",
-        signal: AbortSignal.timeout(20000),
-      });
-
-      if (!siteRes.ok) {
-        console.log(`${tryUrl} returned ${siteRes.status}`);
-        continue;
-      }
-
-      const html = await siteRes.text();
-      const cleanText = cleanHtml(html);
-
-      if (cleanText.length < 100) {
-        console.log(`${tryUrl} content too short (${cleanText.length} chars)`);
-        continue;
-      }
-
-      console.log(`Success: ${tryUrl} — ${cleanText.length} chars extracted`);
-      return res.json({ text: cleanText, success: true });
-    } catch (e) {
-      console.log(`${tryUrl} failed: ${e.message}`);
-      continue;
-    }
+      console.log(`[${label}] ${fetchUrl}`);
+      const r = await fetch(fetchUrl, { headers: browserHeaders, redirect: "follow", signal: AbortSignal.timeout(20000) });
+      if (!r.ok) { console.log(`[${label}] ${r.status}`); return null; }
+      const html = await r.text();
+      const text = cleanHtml(html);
+      if (text.length < 100) { console.log(`[${label}] too short: ${text.length}`); return null; }
+      console.log(`[${label}] OK: ${text.length} chars`);
+      return text;
+    } catch (e) { console.log(`[${label}] ${e.message}`); return null; }
   }
 
-  console.error("All URL variations failed for:", url);
-  res.json({ text: "", success: false, error: "Could not fetch any variation of " + url });
+  // Strategy 1: Direct
+  let text = await tryDirect(fullUrl, "direct");
+  if (!text) text = await tryDirect("https://www." + base.replace(/^www\./, ""), "direct-www");
+
+  // Strategy 2: allorigins proxy
+  if (!text) {
+    try {
+      console.log("[allorigins] trying...");
+      const r = await fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(fullUrl), { signal: AbortSignal.timeout(20000) });
+      if (r.ok) {
+        const json = await r.json();
+        if (json.contents && json.contents.length > 200) {
+          const t = cleanHtml(json.contents);
+          if (t.length >= 100) { text = t; console.log(`[allorigins] OK: ${t.length} chars`); }
+        }
+      }
+    } catch (e) { console.log("[allorigins]", e.message); }
+  }
+
+  // Strategy 3: corsproxy
+  if (!text) {
+    try {
+      console.log("[corsproxy] trying...");
+      const r = await fetch("https://corsproxy.io/?" + encodeURIComponent(fullUrl), { headers: browserHeaders, signal: AbortSignal.timeout(20000) });
+      if (r.ok) {
+        const html = await r.text();
+        if (html.length > 200) {
+          const t = cleanHtml(html);
+          if (t.length >= 100) { text = t; console.log(`[corsproxy] OK: ${t.length} chars`); }
+        }
+      }
+    } catch (e) { console.log("[corsproxy]", e.message); }
+  }
+
+  // Strategy 4: Google cache
+  if (!text) {
+    try {
+      console.log("[google-cache] trying...");
+      const r = await fetch("https://webcache.googleusercontent.com/search?q=cache:" + encodeURIComponent(fullUrl), { headers: browserHeaders, redirect: "follow", signal: AbortSignal.timeout(20000) });
+      if (r.ok) {
+        const html = await r.text();
+        const t = cleanHtml(html);
+        if (t.length >= 100) { text = t; console.log(`[google-cache] OK: ${t.length} chars`); }
+      }
+    } catch (e) { console.log("[google-cache]", e.message); }
+  }
+
+  if (text) {
+    res.json({ text, success: true });
+  } else {
+    console.error("All strategies failed for:", url);
+    res.json({ text: "", success: false, error: "Site blocked all fetch methods. Paste content manually." });
+  }
 });
 
 // Step 2: Extract structured info from website text via Gemini
