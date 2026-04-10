@@ -177,13 +177,13 @@ app.get("/test-key", async (req, res) => {
 });
 
 // Step 1: Fetch and extract website content
-// Tries: direct fetch → allorigins proxy → corsproxy → Google cache
+// Fetches homepage + common subpages, combines all text
 app.post("/fetch-site", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "url required" });
 
   const base = url.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-  const fullUrl = "https://" + base;
+  const origin = "https://" + base;
 
   const browserHeaders = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -192,72 +192,107 @@ app.post("/fetch-site", async (req, res) => {
     "Accept-Encoding": "identity",
   };
 
-  async function tryDirect(fetchUrl, label) {
+  // Fetch a single page — try direct then corsproxy
+  async function fetchPage(pageUrl) {
+    // Try direct first
     try {
-      console.log(`[${label}] ${fetchUrl}`);
-      const r = await fetch(fetchUrl, { headers: browserHeaders, redirect: "follow", signal: AbortSignal.timeout(20000) });
-      if (!r.ok) { console.log(`[${label}] ${r.status}`); return null; }
-      const html = await r.text();
-      const text = cleanHtml(html);
-      if (text.length < 100) { console.log(`[${label}] too short: ${text.length}`); return null; }
-      console.log(`[${label}] OK: ${text.length} chars`);
-      return text;
-    } catch (e) { console.log(`[${label}] ${e.message}`); return null; }
-  }
-
-  // Strategy 1: Direct
-  let text = await tryDirect(fullUrl, "direct");
-  if (!text) text = await tryDirect("https://www." + base.replace(/^www\./, ""), "direct-www");
-
-  // Strategy 2: allorigins proxy
-  if (!text) {
-    try {
-      console.log("[allorigins] trying...");
-      const r = await fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(fullUrl), { signal: AbortSignal.timeout(20000) });
-      if (r.ok) {
-        const json = await r.json();
-        if (json.contents && json.contents.length > 200) {
-          const t = cleanHtml(json.contents);
-          if (t.length >= 100) { text = t; console.log(`[allorigins] OK: ${t.length} chars`); }
-        }
-      }
-    } catch (e) { console.log("[allorigins]", e.message); }
-  }
-
-  // Strategy 3: corsproxy
-  if (!text) {
-    try {
-      console.log("[corsproxy] trying...");
-      const r = await fetch("https://corsproxy.io/?" + encodeURIComponent(fullUrl), { headers: browserHeaders, signal: AbortSignal.timeout(20000) });
-      if (r.ok) {
-        const html = await r.text();
-        if (html.length > 200) {
-          const t = cleanHtml(html);
-          if (t.length >= 100) { text = t; console.log(`[corsproxy] OK: ${t.length} chars`); }
-        }
-      }
-    } catch (e) { console.log("[corsproxy]", e.message); }
-  }
-
-  // Strategy 4: Google cache
-  if (!text) {
-    try {
-      console.log("[google-cache] trying...");
-      const r = await fetch("https://webcache.googleusercontent.com/search?q=cache:" + encodeURIComponent(fullUrl), { headers: browserHeaders, redirect: "follow", signal: AbortSignal.timeout(20000) });
+      const r = await fetch(pageUrl, { headers: browserHeaders, redirect: "follow", signal: AbortSignal.timeout(15000) });
       if (r.ok) {
         const html = await r.text();
         const t = cleanHtml(html);
-        if (t.length >= 100) { text = t; console.log(`[google-cache] OK: ${t.length} chars`); }
+        if (t.length >= 50) return t;
       }
-    } catch (e) { console.log("[google-cache]", e.message); }
+    } catch (e) { /* fall through */ }
+
+    // Try corsproxy
+    try {
+      const r = await fetch("https://corsproxy.io/?" + encodeURIComponent(pageUrl), { headers: browserHeaders, signal: AbortSignal.timeout(15000) });
+      if (r.ok) {
+        const html = await r.text();
+        const t = cleanHtml(html);
+        if (t.length >= 50) return t;
+      }
+    } catch (e) { /* fall through */ }
+
+    return null;
   }
 
-  if (text) {
-    res.json({ text, success: true });
-  } else {
-    console.error("All strategies failed for:", url);
-    res.json({ text: "", success: false, error: "Site blocked all fetch methods. Paste content manually." });
+  // Minimal fallback paths — the link discovery above finds the real pages
+  // These are just universal paths that almost every business site has
+  const subpages = [
+    "/about", "/about-us", "/services", "/contact"
+  ];
+
+  console.log(`[multi-page] Starting crawl of ${origin}`);
+
+  // Fetch homepage first to confirm the site works
+  const homeText = await fetchPage(origin + "/");
+  if (!homeText) {
+    console.error("[multi-page] Could not fetch homepage for:", url);
+    return res.json({ text: "", success: false, error: "Could not fetch site. Paste content manually." });
   }
+
+  // Now try to discover actual links from the homepage HTML
+  let discoveredPaths = [];
+  try {
+    // Fetch raw HTML to find links
+    let rawHtml = "";
+    try {
+      const r = await fetch("https://corsproxy.io/?" + encodeURIComponent(origin + "/"), { headers: browserHeaders, signal: AbortSignal.timeout(15000) });
+      if (r.ok) rawHtml = await r.text();
+    } catch (e) { /* skip discovery */ }
+
+    if (rawHtml) {
+      const $ = cheerio.load(rawHtml);
+      $("a[href]").each((_, el) => {
+        const href = $(el).attr("href") || "";
+        // Only internal links, not anchors or external
+        if (href.startsWith("/") && !href.startsWith("//") && href.length > 1 && href.length < 60) {
+          const path = href.split("?")[0].split("#")[0];
+          if (!discoveredPaths.includes(path)) discoveredPaths.push(path);
+        }
+      });
+      console.log(`[multi-page] Discovered ${discoveredPaths.length} internal links`);
+    }
+  } catch (e) { /* skip discovery */ }
+
+  // Merge discovered paths with common subpages, deduplicate
+  const allPaths = [...new Set([...discoveredPaths, ...subpages])].filter(p => p !== "/");
+
+  // Fetch subpages in parallel (max 6 at a time to be polite)
+  const pageTexts = { "HOME": homeText };
+  const batchSize = 6;
+
+  for (let i = 0; i < allPaths.length && Object.keys(pageTexts).length < 10; i += batchSize) {
+    const batch = allPaths.slice(i, i + batchSize);
+    const results = await Promise.allSettled(
+      batch.map(async (path) => {
+        const t = await fetchPage(origin + path);
+        return { path, text: t };
+      })
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value.text && r.value.text.length >= 100) {
+        // Skip if it's basically the same as the homepage (some sites return same content for all paths)
+        if (r.value.text.slice(0, 200) !== homeText.slice(0, 200)) {
+          const label = r.value.path.replace(/\//g, "").toUpperCase() || "PAGE";
+          pageTexts[label] = r.value.text;
+          console.log(`[multi-page] ${r.value.path} — ${r.value.text.length} chars`);
+        }
+      }
+    }
+  }
+
+  // Combine all page texts with labels, cap total at 12000 chars for Gemini
+  let combined = "";
+  for (const [label, text] of Object.entries(pageTexts)) {
+    combined += `\n\n=== ${label} PAGE ===\n${text}`;
+    if (combined.length > 12000) break;
+  }
+  combined = combined.trim().slice(0, 12000);
+
+  console.log(`[multi-page] Done. ${Object.keys(pageTexts).length} pages, ${combined.length} total chars`);
+  res.json({ text: combined, success: true });
 });
 
 // Step 2: Extract structured info from website text via Gemini
