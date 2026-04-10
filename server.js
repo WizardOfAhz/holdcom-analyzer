@@ -424,7 +424,91 @@ app.post("/email", async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════
+//  PUBLISH LANDING PAGE TO NETLIFY
+// ═══════════════════════════════════════════════════
+const NETLIFY_TOKEN = process.env.NETLIFY_TOKEN;
+const NETLIFY_SITE_ID = process.env.NETLIFY_SITE_ID;
+
+app.post("/publish", async (req, res) => {
+  const { html, clientId } = req.body;
+  if (!html || !clientId) return res.status(400).json({ error: "html and clientId required" });
+  if (!NETLIFY_TOKEN || !NETLIFY_SITE_ID) return res.status(500).json({ error: "Netlify not configured on server" });
+
+  try {
+    // Netlify file digest deploy: we create a simple deploy with the file content
+    const fileName = clientId + ".html";
+    const fileContent = html;
+    const encoder = new TextEncoder();
+    const fileBytes = encoder.encode(fileContent);
+
+    // Step 1: Calculate SHA1 hash of the file
+    const hashBuffer = await crypto.subtle.digest("SHA-1", fileBytes);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const sha1 = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+
+    // Step 2: Create deploy with file manifest
+    const deployRes = await fetch(`https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${NETLIFY_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        files: {
+          ["/" + fileName]: sha1,
+          "/index.html": sha1  // Also update the index to show latest
+        },
+        draft: false,
+      }),
+    });
+
+    if (!deployRes.ok) {
+      const err = await deployRes.text();
+      throw new Error("Netlify deploy failed: " + err);
+    }
+
+    const deploy = await deployRes.json();
+    const deployId = deploy.id;
+
+    // Step 3: Upload the file content
+    const uploadRes = await fetch(`https://api.netlify.com/api/v1/deploys/${deployId}/files/${encodeURIComponent("/" + fileName)}`, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Bearer ${NETLIFY_TOKEN}`,
+        "Content-Type": "application/octet-stream",
+      },
+      body: fileContent,
+    });
+
+    if (!uploadRes.ok) {
+      const err = await uploadRes.text();
+      throw new Error("Netlify upload failed: " + err);
+    }
+
+    // Also upload as index.html
+    await fetch(`https://api.netlify.com/api/v1/deploys/${deployId}/files//index.html`, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Bearer ${NETLIFY_TOKEN}`,
+        "Content-Type": "application/octet-stream",
+      },
+      body: fileContent,
+    });
+
+    const siteUrl = deploy.ssl_url || deploy.url || `https://holdcom-insights.netlify.app`;
+    const pageUrl = siteUrl + "/" + fileName;
+
+    console.log(`Published: ${pageUrl}`);
+    res.json({ url: pageUrl, siteUrl, deployId });
+  } catch (e) {
+    console.error("publish error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════
 app.listen(PORT, () => {
   console.log(`Holdcom Analyzer API running on port ${PORT}`);
   console.log(`Gemini key: ${GEMINI_KEY ? "✓ set" : "✗ MISSING — set GEMINI_KEY env var"}`);
+  console.log(`Netlify: ${NETLIFY_TOKEN ? "✓ configured" : "✗ MISSING — set NETLIFY_TOKEN and NETLIFY_SITE_ID"}`);
 });
