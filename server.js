@@ -181,27 +181,54 @@ app.post("/fetch-site", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "url required" });
 
-  try {
-    const fullUrl = url.startsWith("http") ? url : "https://" + url;
-    const siteRes = await fetch(fullUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!siteRes.ok) throw new Error(`Site returned ${siteRes.status}`);
-    const html = await siteRes.text();
-    const cleanText = cleanHtml(html);
+  const browserHeaders = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "identity",
+    "Connection": "keep-alive",
+  };
 
-    if (cleanText.length < 100)
-      throw new Error("Page content too short — may be blocked or empty");
+  // Try multiple URL variations
+  const base = url.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const urlsToTry = [
+    "https://" + base,
+    "https://www." + base.replace(/^www\./, ""),
+    "http://" + base,
+  ];
 
-    res.json({ text: cleanText, success: true });
-  } catch (e) {
-    console.error("fetch-site error:", e.message);
-    res.json({ text: "", success: false, error: e.message });
+  for (const tryUrl of urlsToTry) {
+    try {
+      console.log("Fetching:", tryUrl);
+      const siteRes = await fetch(tryUrl, {
+        headers: browserHeaders,
+        redirect: "follow",
+        signal: AbortSignal.timeout(20000),
+      });
+
+      if (!siteRes.ok) {
+        console.log(`${tryUrl} returned ${siteRes.status}`);
+        continue;
+      }
+
+      const html = await siteRes.text();
+      const cleanText = cleanHtml(html);
+
+      if (cleanText.length < 100) {
+        console.log(`${tryUrl} content too short (${cleanText.length} chars)`);
+        continue;
+      }
+
+      console.log(`Success: ${tryUrl} — ${cleanText.length} chars extracted`);
+      return res.json({ text: cleanText, success: true });
+    } catch (e) {
+      console.log(`${tryUrl} failed: ${e.message}`);
+      continue;
+    }
   }
+
+  console.error("All URL variations failed for:", url);
+  res.json({ text: "", success: false, error: "Could not fetch any variation of " + url });
 });
 
 // Step 2: Extract structured info from website text via Gemini
