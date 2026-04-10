@@ -777,11 +777,16 @@ async function runEmail() {
   showTyping('Writing outreach email...');
 
   const top = S.analysis?.insights?.[0];
+  const sc = S.analysis?.scorecard || {};
+  const scores = Object.entries(sc).map(([k,v]) => k.replace(/_/g,' ') + ': ' + (v.score||0) + '/100').join(', ');
+  const findings = (S.analysis?.insights || []).map(i => i.observation).join('; ');
   const emailData = await api('/email', {
     clientName: S.clientName,
     repName: S.repName,
-    finding: top?.implication || top?.observation || 'several opportunities identified',
-    clientId: S.clientId
+    finding: findings || 'several opportunities identified',
+    scores: scores,
+    clientId: S.clientId,
+    link: 'https://insights.holdcom.com/' + S.clientId
   });
   const emailRaw = emailData.result;
 
