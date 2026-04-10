@@ -15,9 +15,9 @@ const GEMINI_KEY = process.env.GEMINI_KEY;
 // ═══════════════════════════════════════════════════
 const MODELS = [
   "gemini-2.5-flash",
-  "gemini-2.0-flash",
   "gemini-2.5-flash-lite",
-  "gemini-2.0-flash-lite",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash-preview-05-20",
 ];
 let _okModel = null;
 
@@ -41,70 +41,71 @@ async function callGemini(systemText, userText, opts = {}) {
   const errors = [];
   for (const model of models) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
 
-      if (res.status === 404 || res.status === 400) {
-        const e = await res.json().catch(() => ({}));
-        errors.push(
-          `${model}: ${res.status} ${(e.error?.message || "").slice(0, 100)}`
-        );
-        continue;
-      }
-
-      if (res.status === 429) {
-        const e = await res.json().catch(() => ({}));
-        const msg = e.error?.message || "";
-        // If rate limit is 0, billing not enabled — skip model
-        if (msg.includes("limit") && msg.includes("0")) {
-          errors.push(`${model}: rate limit 0 — billing may not be enabled`);
-          continue;
-        }
-        // Otherwise wait and retry once
-        const wait = msg.match(/retry in ([\d.]+)s/i);
-        const secs = wait ? Math.ceil(parseFloat(wait[1])) + 2 : 30;
-        console.log(`Rate limited on ${model}, waiting ${secs}s...`);
-        await new Promise((r) => setTimeout(r, secs * 1000));
-        const res2 = await fetch(url, {
+    // Try up to 3 times per model (handles 503 temporary overload)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        if (attempt > 1) console.log(`${model}: retry attempt ${attempt}...`);
+        const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (res2.ok) {
-          const d2 = await res2.json();
-          if (!d2.error) {
-            _okModel = model;
-            return extractGeminiText(d2);
-          }
+
+        if (res.status === 404 || res.status === 400) {
+          const e = await res.json().catch(() => ({}));
+          errors.push(
+            `${model}: ${res.status} ${(e.error?.message || "").slice(0, 100)}`
+          );
+          break; // Don't retry 404/400 — model is gone
         }
-        errors.push(`${model}: still rate limited after retry`);
-        continue;
-      }
 
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        errors.push(
-          `${model}: ${res.status} ${(e.error?.message || "").slice(0, 100)}`
-        );
-        continue;
-      }
+        if (res.status === 503) {
+          console.log(`${model}: 503 overloaded (attempt ${attempt}/3)`);
+          if (attempt < 3) {
+            await new Promise((r) => setTimeout(r, 5000 * attempt)); // 5s, 10s
+            continue; // Retry same model
+          }
+          errors.push(`${model}: 503 overloaded after 3 attempts`);
+          break; // Move to next model
+        }
 
-      const data = await res.json();
-      if (data.error) {
-        errors.push(`${model}: ${data.error.message.slice(0, 100)}`);
-        continue;
-      }
+        if (res.status === 429) {
+          const e = await res.json().catch(() => ({}));
+          const msg = e.error?.message || "";
+          if (msg.includes("limit") && msg.includes("0")) {
+            errors.push(`${model}: rate limit 0 — billing may not be enabled`);
+            break;
+          }
+          const wait = msg.match(/retry in ([\d.]+)s/i);
+          const secs = wait ? Math.ceil(parseFloat(wait[1])) + 2 : 30;
+          console.log(`Rate limited on ${model}, waiting ${secs}s...`);
+          await new Promise((r) => setTimeout(r, secs * 1000));
+          continue; // Retry same model
+        }
 
-      _okModel = model;
-      console.log(`Using model: ${model}`);
-      return extractGeminiText(data);
-    } catch (e) {
-      errors.push(`${model}: ${e.message.slice(0, 100)}`);
-      continue;
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          errors.push(
+            `${model}: ${res.status} ${(e.error?.message || "").slice(0, 100)}`
+          );
+          break;
+        }
+
+        const data = await res.json();
+        if (data.error) {
+          errors.push(`${model}: ${data.error.message.slice(0, 100)}`);
+          break;
+        }
+
+        _okModel = model;
+        console.log(`Using model: ${model}`);
+        return extractGeminiText(data);
+
+      } catch (e) {
+        errors.push(`${model}: ${e.message.slice(0, 100)}`);
+        break;
+      }
     }
   }
 
