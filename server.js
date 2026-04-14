@@ -346,28 +346,29 @@ app.post("/analyze", async (req, res) => {
 
 // Step 4: Script rewrite
 app.post("/rewrite", async (req, res) => {
-  const { clientName, wordLimit, script, gaps, siteText } = req.body;
+  const { clientName, industry, wordLimit, script, gaps, siteText, repNotes } = req.body;
   try {
     const prompt =
-      `CLIENT: ${clientName}\nWORD LIMIT: ${wordLimit} words (hard limit — count carefully)\n\n` +
-      `ORIGINAL SCRIPT:\n${script}\n\n` +
+      `CLIENT: ${clientName}\nINDUSTRY: ${industry || 'General'}\nWORD LIMIT: ${wordLimit} words (hard limit — count carefully)\n\n` +
+      `ORIGINAL SCRIPT (for tone/voice reference only):\n${script}\n\n` +
       `GAPS TO WEAVE IN:\n${gaps.map((g, i) => i + 1 + ". " + g).join("\n")}\n\n` +
-      `WEBSITE CONTEXT:\n${(siteText || "").slice(0, 600)}\n\n` +
-      `Write the complete revised script. Wrap new/changed phrases in <<NEW>>phrase<</NEW>>. ` +
+      `WEBSITE CONTEXT:\n${(siteText || "").slice(0, 800)}\n\n` +
+      (repNotes ? `REP NOTES (additional context from the account manager — treat as high priority):\n${repNotes}\n\n` : '') +
+      `Write the complete script from scratch. Wrap new/changed phrases in <<NEW>>phrase<</NEW>>. ` +
       `Then write ===CHANGES=== followed by bullet points of what changed.`;
 
     const sys =
-      `You are a professional on-hold messaging copywriter at Holdcom.\n` +
-      `Write a COMPLETE revised script — not the original with things bolted on.\n` +
-      `Weave new elements in naturally so the result reads as one cohesive piece.\n` +
-      `Match original tone and voice exactly. Hard word limit: ${wordLimit} words.\n` +
+      `You are a senior on-hold messaging copywriter at Holdcom, writing for a ${industry || 'business'} client.\n` +
+      `APPROACH: Write a FRESH script from scratch — do NOT edit or patch the original. Use the original script only to understand the client's brand voice and tone. Then write something new that sounds like the same brand but is a complete reimagining.\n` +
+      `The script should feel like it was written by a professional who studied the client's website deeply — not like a revision of the old script.\n` +
+      `Hard word limit: ${wordLimit} words. Count carefully.\n` +
       `Wrap only NEW or significantly changed phrases in <<NEW>>...</</NEW>>.\n` +
-      `A senior copywriter should not be able to find the seams.\n` +
-      `CRITICAL: ONLY use facts, services, and descriptions from the website context provided. NEVER invent features, locations, or descriptors (like "waterfront", "oceanfront", "lakeside") that are not explicitly in the source material.`;
+      `CRITICAL: ONLY use facts, services, and descriptions from the website context and rep notes provided. NEVER invent features, locations, or descriptors (like "waterfront", "oceanfront", "lakeside") that are not explicitly in the source material.\n` +
+      `If rep notes mention social media activity, events, or services not on the website, you may include those — they come from the account manager who knows the client.`;
 
     const raw = await callGemini(sys, prompt, {
       maxOutputTokens: 3500,
-      temperature: 0.4,
+      temperature: 0.5,
     });
     res.json({ result: raw });
   } catch (e) {
