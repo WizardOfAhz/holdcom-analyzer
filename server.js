@@ -26,6 +26,7 @@ async function callGemini(systemText, userText, opts = {}) {
 
   const maxTokens = opts.maxOutputTokens || 2000;
   const temperature = opts.temperature ?? 0.3;
+  const timeoutMs = opts.timeoutMs || 60000; // 60s default
 
   const payload = {
     system_instruction: { parts: [{ text: systemText }] },
@@ -46,11 +47,20 @@ async function callGemini(systemText, userText, opts = {}) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         if (attempt > 1) console.log(`${model}: retry attempt ${attempt}...`);
+
+        // Add abort controller for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const startTime = Date.now();
+
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
+        console.log(`${model}: response in ${Date.now() - startTime}ms (status ${res.status})`);
 
         if (res.status === 404 || res.status === 400) {
           const e = await res.json().catch(() => ({}));
@@ -98,12 +108,24 @@ async function callGemini(systemText, userText, opts = {}) {
           break;
         }
 
+        const text = extractGeminiText(data);
+        if (!text || text.length < 10) {
+          console.log(`${model}: returned empty/short response`, JSON.stringify(data).slice(0, 300));
+          errors.push(`${model}: empty response`);
+          break;
+        }
+
         _okModel = model;
-        console.log(`Using model: ${model}`);
-        return extractGeminiText(data);
+        console.log(`Using model: ${model}, returned ${text.length} chars`);
+        return text;
 
       } catch (e) {
-        errors.push(`${model}: ${e.message.slice(0, 100)}`);
+        if (e.name === 'AbortError') {
+          console.log(`${model}: TIMEOUT after ${timeoutMs}ms`);
+          errors.push(`${model}: timeout (${timeoutMs/1000}s)`);
+        } else {
+          errors.push(`${model}: ${e.message.slice(0, 100)}`);
+        }
         break;
       }
     }
@@ -347,6 +369,7 @@ app.post("/analyze", async (req, res) => {
 // Step 4: Script rewrite
 app.post("/rewrite", async (req, res) => {
   const { clientName, industry, wordLimit, script, gaps, siteText, repNotes } = req.body;
+  console.log(`[rewrite] ${clientName} | industry: ${industry} | ${gaps?.length || 0} gaps | repNotes: ${repNotes ? 'yes' : 'no'}`);
   try {
     const prompt =
       `CLIENT: ${clientName}\nINDUSTRY: ${industry || 'General'}\nWORD LIMIT: ${wordLimit} words (hard limit — count carefully)\n\n` +
@@ -362,6 +385,10 @@ app.post("/rewrite", async (req, res) => {
       `APPROACH: Write a FRESH script from scratch — do NOT edit or patch the original. Use the original script only to understand the client's brand voice and tone. Then write something new that sounds like the same brand but is a complete reimagining.\n` +
       `The script should feel like it was written by a professional who studied the client's website deeply — not like a revision of the old script.\n` +
       `Hard word limit: ${wordLimit} words. Count carefully.\n` +
+      `FORMAT: Use standard on-hold script format:\n` +
+      `- Number each paragraph (1., 2., 3., etc.)\n` +
+      `- Insert {music} between paragraphs to indicate music breaks\n` +
+      `- Match the paragraph/music structure of the original script if one was provided\n` +
       `Wrap only NEW or significantly changed phrases in <<NEW>>...</</NEW>>.\n` +
       `CRITICAL: ONLY use facts, services, and descriptions from the website context and rep notes provided. NEVER invent features, locations, or descriptors (like "waterfront", "oceanfront", "lakeside") that are not explicitly in the source material.\n` +
       `If rep notes mention social media activity, events, or services not on the website, you may include those — they come from the account manager who knows the client.`;
@@ -369,10 +396,12 @@ app.post("/rewrite", async (req, res) => {
     const raw = await callGemini(sys, prompt, {
       maxOutputTokens: 3500,
       temperature: 0.5,
+      timeoutMs: 90000, // 90s — rewrite can take a while
     });
+    console.log(`[rewrite] SUCCESS: ${raw.length} chars`);
     res.json({ result: raw });
   } catch (e) {
-    console.error("rewrite error:", e.message);
+    console.error("[rewrite] ERROR:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
