@@ -582,8 +582,21 @@ async function stepWordLimit(input) {
     S.siteText = text;
     setTyping('Extracting business info...');
 
-    const extractData = await api('/extract', {siteText: text, clientUrl: S.clientUrl});
-    const extracted = extractData.result;
+    let extracted;
+    try {
+      const extractData = await api('/extract', {siteText: text, clientUrl: S.clientUrl}, 90000);
+      extracted = extractData.result;
+    } catch(err) {
+      removeTyping();
+      addMsg('ai',
+        '⚠ Extraction timed out: <em>' + err.message + '</em><br><br>'
+        + 'The server may be waking up. Wait a moment and reload to try again, or paste the site text manually below.'
+      );
+      S.siteText = text; // keep raw text as fallback
+      S.waiting = 'confirm_site';
+      ph('Add corrections or proceed...');
+      return;
+    }
 
     S.siteText = extracted;
     removeTyping();
@@ -640,12 +653,24 @@ async function runAnalysis() {
   setSidebar(2);
   showTyping('Comparing website to script...');
 
-  const analyzeData = await api('/analyze', {
-    clientName: S.clientName,
-    clientUrl: S.clientUrl,
-    siteText: S.siteText,
-    script: S.script
-  });
+  let analyzeData;
+  try {
+    analyzeData = await api('/analyze', {
+      clientName: S.clientName,
+      clientUrl: S.clientUrl,
+      siteText: S.siteText,
+      script: S.script
+    }, 90000); // 90s — Render cold start + Gemini can take a while
+  } catch(err) {
+    removeTyping();
+    addMsg('ai',
+      '⚠ Analysis timed out or failed: <em>' + err.message + '</em><br><br>'
+      + 'This usually means the server is waking up from sleep. '
+      + '<strong>Wait 10–15 seconds and try again</strong> — it should be faster on the second attempt.',
+      '<div class="act-row"><button class="act-btn primary" onclick="runAnalysis()">Try again ➜</button></div>'
+    );
+    return;
+  }
 
   removeTyping();
 
