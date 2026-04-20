@@ -390,7 +390,7 @@ app.post("/rewrite", async (req, res) => {
       `- Number each paragraph with bracketed numbers: [1], [2], [3], etc.\n` +
       `- Insert {music} between paragraphs to indicate music breaks\n` +
       `- Match the paragraph/music structure of the original script if one was provided\n` +
-      `Wrap only NEW or significantly changed phrases in <<NEW>>...</<NEW>>. Do NOT use any other bracket styles.\n` +
+      `Wrap only NEW or significantly changed phrases in <<NEW>>...</<NEW>>. CRITICAL: use ONLY <<NEW>> to open and <</NEW>> to close. Do NOT use <<END NEW>>, <<NEW END>>, or any other closing variant.\n` +
       `CRITICAL: ONLY use facts, services, and descriptions from the website context and rep notes provided. NEVER invent features, locations, or descriptors (like "waterfront", "oceanfront", "lakeside") that are not explicitly in the source material.\n` +
       `If rep notes mention social media activity, events, or services not on the website, you may include those — they come from the account manager who knows the client.`;
 
