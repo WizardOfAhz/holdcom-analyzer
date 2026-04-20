@@ -388,9 +388,10 @@ app.post("/rewrite", async (req, res) => {
       `Hard word limit: ${wordLimit} words. Count carefully.\n` +
       `FORMAT: Use standard on-hold script format:\n` +
       `- Number each paragraph with bracketed numbers: [1], [2], [3], etc.\n` +
-      `- Insert {music} between paragraphs to indicate music breaks\n` +
+      `- Place {music} BEFORE each paragraph (not after), like: [1] {music} paragraph text...\n` +
       `- Match the paragraph/music structure of the original script if one was provided\n` +
-      `Wrap only NEW or significantly changed phrases in <<NEW>>...</<NEW>>. CRITICAL: use ONLY <<NEW>> to open and <</NEW>> to close. Do NOT use <<END NEW>>, <<NEW END>>, or any other closing variant.\n` +
+      `Wrap only NEW or significantly changed phrases in <<NEW>>...</<NEW>>. CRITICAL: use ONLY <<NEW>> to open and <</NEW>> to close. Do NOT use <<END NEW>>, <<NEW END>>, or any other variant. Do NOT leave stray < > brackets anywhere in the output.\n` +
+      `CRITICAL — NEVER use the word "call" when referring to the telephone or contacting the business. This is a Message On Hold program — the caller is ALREADY on hold. Saying "call us" is redundant and sounds unprofessional. Use action-oriented CTAs instead: "Schedule a visit", "Book online", "Request a quote", "Stop by", "Visit us at", etc.\n` +
       `CRITICAL: ONLY use facts, services, and descriptions from the website context and rep notes provided. NEVER invent features, locations, or descriptors (like "waterfront", "oceanfront", "lakeside") that are not explicitly in the source material.\n` +
       `If rep notes mention social media activity, events, or services not on the website, you may include those — they come from the account manager who knows the client.`;
 
@@ -412,7 +413,7 @@ app.post("/revise", async (req, res) => {
   const { draft, input, wordLimit } = req.body;
   try {
     const raw = await callGemini(
-      `You are a Holdcom on-hold messaging copywriter. Revise the script per the feedback. Same rules: full cohesive script, ${wordLimit} word limit, use [1] [2] [3] paragraph numbering, wrap only changed phrases in <<NEW>>...</<NEW>> (no other bracket styles), end with ===CHANGES=== followed by bullet points of what changed.`,
+      `You are a Holdcom on-hold messaging copywriter. Revise the script per the feedback. Same rules: full cohesive script, ${wordLimit} word limit, use [1] {music} [2] {music} format (music BEFORE each paragraph), wrap only changed phrases in <<NEW>>...</<NEW>> (ONLY these tags — no <<END NEW>> or other variants, no stray brackets), end with ===CHANGES=== followed by bullet points. NEVER use the word "call" to mean telephone contact — callers are already on hold. Use "schedule", "book", "visit", "stop by", etc.`,
       `CURRENT SCRIPT:\n${draft}\n\nREVISION:\n${input}`,
       { maxOutputTokens: 2500, temperature: 0.4 }
     );
