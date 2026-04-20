@@ -154,6 +154,7 @@ function cleanHtml(html) {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&nbsp;/g, " ")
+    .replace(/©.*?\d{4}/g, "")
     .replace(/\s{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
@@ -386,10 +387,10 @@ app.post("/rewrite", async (req, res) => {
       `The script should feel like it was written by a professional who studied the client's website deeply — not like a revision of the old script.\n` +
       `Hard word limit: ${wordLimit} words. Count carefully.\n` +
       `FORMAT: Use standard on-hold script format:\n` +
-      `- Number each paragraph (1., 2., 3., etc.)\n` +
+      `- Number each paragraph with bracketed numbers: [1], [2], [3], etc.\n` +
       `- Insert {music} between paragraphs to indicate music breaks\n` +
       `- Match the paragraph/music structure of the original script if one was provided\n` +
-      `Wrap only NEW or significantly changed phrases in <<NEW>>...</</NEW>>.\n` +
+      `Wrap only NEW or significantly changed phrases in <<NEW>>...</<NEW>>. Do NOT use any other bracket styles.\n` +
       `CRITICAL: ONLY use facts, services, and descriptions from the website context and rep notes provided. NEVER invent features, locations, or descriptors (like "waterfront", "oceanfront", "lakeside") that are not explicitly in the source material.\n` +
       `If rep notes mention social media activity, events, or services not on the website, you may include those — they come from the account manager who knows the client.`;
 
@@ -411,7 +412,7 @@ app.post("/revise", async (req, res) => {
   const { draft, input, wordLimit } = req.body;
   try {
     const raw = await callGemini(
-      `You are a Holdcom on-hold messaging copywriter. Revise the script per the feedback. Same rules: full cohesive script, ${wordLimit} word limit, wrap changes in <<NEW>><</NEW>>, end with ===CHANGES===.`,
+      `You are a Holdcom on-hold messaging copywriter. Revise the script per the feedback. Same rules: full cohesive script, ${wordLimit} word limit, use [1] [2] [3] paragraph numbering, wrap only changed phrases in <<NEW>>...</<NEW>> (no other bracket styles), end with ===CHANGES=== followed by bullet points of what changed.`,
       `CURRENT SCRIPT:\n${draft}\n\nREVISION:\n${input}`,
       { maxOutputTokens: 2500, temperature: 0.4 }
     );
@@ -452,6 +453,31 @@ app.post("/email", async (req, res) => {
     console.error("email error:", e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ═══════════════════════════════════════════════════
+//  TRACK LANDING PAGE EVENTS (Pipedream-ready)
+// ═══════════════════════════════════════════════════
+// To activate: set PIPEDREAM_URL env var on Render to your Pipedream webhook URL.
+// Pipedream will receive: event, client, ts (and optionally type for feedback).
+// From there, configure Pipedream to send email or Teams/Slack notification to rep.
+const PIPEDREAM_URL = process.env.PIPEDREAM_URL || '';
+
+app.post('/track', async (req, res) => {
+  const { event, client, type, ts } = req.body;
+  console.log(`[track] event=${event} client=${client || '?'} type=${type || '-'} ts=${ts || new Date().toISOString()}`);
+
+  if (PIPEDREAM_URL) {
+    try {
+      const params = new URLSearchParams({ event, client: client || '', ts: ts || new Date().toISOString() });
+      if (type) params.set('type', type);
+      await fetch(`${PIPEDREAM_URL}?${params.toString()}`);
+    } catch (e) {
+      console.error('[track] Pipedream forward failed:', e.message);
+    }
+  }
+
+  res.sendStatus(200);
 });
 
 // ═══════════════════════════════════════════════════
